@@ -1,0 +1,288 @@
+{% extends "base.html" %}
+{% block title %}{{ paper.title }} · {{ site_title }}{% endblock %}
+{% block content %}
+
+<div class="card">
+  <p class="muted" style="margin-bottom:var(--s-1)">
+    BIS Working Papers No {{ paper.series }} · {{ paper.pub_date }}
+  </p>
+  <h1>{{ paper.title }}</h1>
+  <p class="muted">{{ paper.authors | join(', ') if paper.authors else 'Authors not yet available' }}</p>
+
+  <div class="btn-row" style="margin:var(--s-4) 0 0">
+    {% if paper.pdf_url %}<a class="btn btn-ghost" href="{{ paper.pdf_url }}" target="_blank" rel="noopener">
+      Full PDF ↗{% if paper.pdf_pages %}（{{ paper.pdf_pages }} pages）{% endif %}
+    </a>{% endif %}
+    <a class="btn btn-ghost" href="{{ paper.abstract_url }}" target="_blank" rel="noopener">
+      BIS abstract ↗
+    </a>
+    {% if zh %}
+    <a class="btn btn-ghost" href="/thesis/{{ paper.series }}.md">Export Markdown</a>
+    {% endif %}
+  </div>
+
+  {% if paper.detail_fetched %}
+  <p class="muted" style="margin-top:var(--s-4)">
+    System score <span class="badge t-{{ paper.tier }}">{{ paper.tier }} {{ paper.relevance }}</span>
+    {{ paper.relevance_why }}
+    <i> (calculated from JEL codes and keywords; not the authors’ views)</i>
+  </p>
+  {% endif %}
+
+  {% if paper.jel_codes or paper.keywords %}
+  <div class="tags">
+    {% for c in paper.jel_codes %}<span class="tag">{{ c }}</span>{% endfor %}
+    {% for k in paper.keywords %}<span class="tag">{{ k }}</span>{% endfor %}
+  </div>
+  {% endif %}
+</div>
+
+{% if has_any %}
+<div class="card" id="bis-abstract">
+  <h2>BIS abstract{% if zh %} (original){% endif %}</h2>
+  <div class="note">{{ coverage_note }}</div>
+  <div class="prose">
+    {# 循环变量不要叫 zh —— 会与Chinese notes对象撞名 #}
+    {% for key, label, provenance in sections %}
+      {% if paper[key] %}
+        <div class="sec-head"><h3>{{ label }}</h3></div>
+        <p class="prov">{{ provenance }}</p>
+        <p>{{ paper[key] }}</p>
+      {% endif %}
+    {% endfor %}
+  </div>
+</div>
+{% elif not zh %}
+<div class="card">
+  <p class="muted">
+    A structured abstract is not available yet. The next check will retry failed fetches. See the <a href="{{ paper.abstract_url }}" target="_blank" rel="noopener">BIS paper page</a>.
+  </p>
+</div>
+{% endif %}
+
+
+{% if zh %}
+<div class="doc-layout">
+
+  <aside class="toc" aria-label="On this page">
+    <div class="toc-title">On this page</div>
+    <div class="toc-list">
+      {% if zh.review and zh.review.caveats %}
+      <a href="#caveats">Check before citing</a>
+      {% endif %}
+      <a href="#citation">Citation</a>
+      {% for key, label in zh_sections %}
+        {% if zh[key] %}<a href="#s-{{ key }}" >{{ label }}</a>{% endif %}
+      {% endfor %}
+      {% if zh.key_takeaway %}<a href="#s-takeaway" >Key Takeaway</a>{% endif %}
+      {% if zh.thesis %}<a href="#thesis-notes">Research notes</a>{% endif %}
+      {% if has_any %}<a href="#bis-abstract">BIS original</a>{% endif %}
+    </div>
+  </aside>
+
+  <div>
+    <div class="card">
+      <div class="card-head">
+        <h2 style="margin:0">Chinese research notes</h2>
+        <button class="icon-btn" data-copy="#zh-body" data-copy-label="full summary">Copy full summary</button>
+      </div>
+      <p class="muted" style="margin-bottom:var(--s-3)">
+        {% if zh.title_zh %}{{ zh.title_zh }}<br>{% endif %}
+        Based on a reading of the full PDF · {{ zh.generated_by }} · {{ zh.generated_at }}<br>These unofficial notes are not BIS translations; BIS does not guarantee their accuracy or completeness. The original is available at the <a href="{{ paper.abstract_url }}">BIS website</a>.
+      </p>
+
+      {% if zh.review_ok %}
+      <div class="note">
+        Core findings and evidence describe the authors’ results; limitations and implications include the note writer’s judgment. Numbers and attribution were reviewed against the PDF. Check the original tables before citing.
+      </div>
+      {% else %}
+      <div class="note note-warn">
+        <b>⚠️ {{ zh.review_label }}</b>: {{ zh.review_note }}. Verify against the <a href="{{ paper.pdf_url or paper.abstract_url }}" target="_blank" rel="noopener">original paper</a> before use.
+      </div>
+      {% endif %}
+
+      {% if zh.review and zh.review.caveats %}
+      <section class="sec" id="caveats">
+        <div class="note note-warn">
+          <b>Check these points before citing</b>
+          <ul style="margin:var(--s-2) 0 0;padding-left:var(--s-5)">
+            {% for c in zh.review.caveats %}<li>{{ c | zh_text(zh, paper.pdf_url) }}</li>{% endfor %}
+          </ul>
+        </div>
+      </section>
+      {% endif %}
+
+      {% if zh.citation %}
+      <section class="sec" id="citation">
+        <div class="sec-head">
+          <h3>Citation</h3>
+          <div class="sec-actions">
+            <button class="icon-btn" data-copy="#citation-text" data-copy-label="Citation">Copy</button>
+          </div>
+        </div>
+        <div class="citation">
+          <p id="citation-text">{{ zh.citation }}</p>
+          <button class="icon-btn" data-copy="#citation-text" data-copy-label="Citation">Copy</button>
+        </div>
+        {% if bibtex %}
+        {# 投期刊或用 Zotero 时要的是 BibTeX，只给 APA 一种格式她还得手动重排 #}
+        <details class="expand" style="margin-top:var(--s-2)">
+          <summary data-label-open="BibTeX"></summary>
+          <div class="citation" style="margin-top:var(--s-2)">
+            {# 必须是 pre：BibTeX 的 10 个换行在 <p> 里会被折叠成一坨，
+               Copy出来也是单行，粘进 .bib 文件虽仍可解析但完全没法读 #}
+            <pre id="bibtex-text" class="bibtex">{{ bibtex }}</pre>
+            <button class="icon-btn" data-copy="#bibtex-text" data-copy-label="BibTeX">Copy</button>
+          </div>
+        </details>
+        {% endif %}
+      </section>
+      {% endif %}
+
+      <div id="zh-body" class="prose">
+      {% for key, label in zh_sections %}
+        {% set val = zh[key] %}
+        {% if val %}
+        <section class="sec" id="s-{{ key }}">
+          <div class="sec-head">
+            <h3>{{ label }}</h3>
+            <div class="sec-actions">
+              <button class="icon-btn" data-copy="#body-{{ key }}" data-copy-label="{{ label }}">Copy section</button>
+              <a class="icon-btn" href="#s-{{ key }}" aria-label="Section link">#</a>
+            </div>
+          </div>
+          <div id="body-{{ key }}">
+            {% if key == 'core_findings' %}
+              <ol style="margin:0;padding-left:var(--s-5)">
+                {% for f in val %}<li style="margin-bottom:var(--s-2)">{{ f | zh_text(zh, paper.pdf_url) }}</li>{% endfor %}
+              </ol>
+            {% elif key == 'key_evidence' %}
+              {% for e in val %}
+              <div class="evidence">
+                <div class="evidence-head">
+                  <span class="tag">{{ e.anchor }}</span>
+                  {# 徽标显示的必须与「Copy citation」是同一个数，否则读者以为Copy错了 #}
+                  {% set badge = e | evidence_badge %}
+                  {% if badge %}<span class="evidence-num">{{ badge }}</span>{% endif %}
+                  {% set cite = e | evidence_citation %}
+                  {% if cite %}
+                  <button class="evidence-cite" onclick="copyText(this.dataset.cite, 'citation')"
+                          data-cite="{{ cite }}" title="Copy citation">
+                    ⧉ Copy citation
+                  </button>
+                  {% endif %}
+                </div>
+                <p>{{ e.detail | zh_text(zh, paper.pdf_url) }}</p>
+              </div>
+              {% endfor %}
+            {% else %}
+              <p>{{ val | zh_text(zh, paper.pdf_url) }}</p>
+            {% endif %}
+          </div>
+        </section>
+        {% endif %}
+      {% endfor %}
+
+      {% if zh.key_takeaway %}
+      <section class="sec" id="s-takeaway">
+        <div class="sec-head">
+          <h3>Key Takeaway</h3>
+          <div class="sec-actions">
+            <button class="icon-btn" data-copy="#body-takeaway" data-copy-label="Key Takeaway">Copy section</button>
+          </div>
+        </div>
+        <div id="body-takeaway"><p>{{ zh.key_takeaway | zh_text(zh, paper.pdf_url) }}</p></div>
+      </section>
+      {% endif %}
+      </div>
+    </div>
+
+    {% if zh.thesis %}
+    <div class="card" id="thesis-notes">
+      <h2>Research notes</h2>
+      <div class="prose">
+        {% if zh.thesis.data_sources %}
+          <div class="sec-head"><h3>Data sources and availability</h3></div>
+          <p>{{ zh.thesis.data_sources | zh_text(zh, paper.pdf_url) }}</p>
+        {% endif %}
+        {% if zh.thesis.replicability %}
+          <div class="sec-head"><h3>Replication in China</h3></div>
+          <p>{{ zh.thesis.replicability | zh_text(zh, paper.pdf_url) }}</p>
+        {% endif %}
+        {% if zh.thesis.research_gaps %}
+          <div class="sec-head"><h3>Research directions</h3></div>
+          <ul style="padding-left:var(--s-5)">
+            {% for g in zh.thesis.research_gaps %}<li style="margin-bottom:var(--s-2)">{{ g | zh_text(zh, paper.pdf_url) }}</li>{% endfor %}
+          </ul>
+        {% endif %}
+        {% if zh.thesis.related_series %}
+          <div class="sec-head"><h3>Related papers</h3></div>
+          <div class="btn-row">
+            {% for s in zh.thesis.related_series %}
+            <a class="btn btn-ghost" href="/paper/{{ s }}">No {{ s }}</a>
+            {% endfor %}
+          </div>
+        {% endif %}
+      </div>
+    </div>
+    {% endif %}
+
+    {% if prev_doc or next_doc %}
+    <nav class="pager-docs" aria-label="Navigate research notes">
+      {% if prev_doc %}
+      <a href="/paper/{{ prev_doc.series }}">
+        <span class="dir">← Previous（{{ prev_doc.theme }}）</span>
+        {{ prev_doc.title_zh }}
+      </a>
+      {% else %}<span></span>{% endif %}
+      {% if next_doc %}
+      <a class="next" href="/paper/{{ next_doc.series }}">
+        <span class="dir">Next（{{ next_doc.theme }}）→</span>
+        {{ next_doc.title_zh }}
+      </a>
+      {% endif %}
+    </nav>
+    {% endif %}
+  </div>
+</div>
+{% endif %}
+
+
+<p class="muted">
+  First seen {{ paper.first_seen_at }}
+  {% if paper.is_baseline %}· baseline (excluded from new-paper digests)
+  {% elif paper.reported_at %}· reported at {{ paper.reported_at }}
+  {% else %}· not yet reported{% endif %}
+  · <a href="/" data-back>Back to papers</a>
+</p>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+  // 目录高亮：滚到哪一节就点亮哪一条
+  (function () {
+    var links = Array.prototype.slice.call(document.querySelectorAll('.toc a[href^="#"]'));
+    if (!links.length) return;
+    var byId = {};
+    links.forEach(function (a) { byId[a.getAttribute('href').slice(1)] = a; });
+    var targets = Object.keys(byId)
+      .map(function (id) { return document.getElementById(id); })
+      .filter(Boolean);
+    if (!targets.length || !('IntersectionObserver' in window)) return;
+
+    var visible = new Set();
+    var io = new IntersectionObserver(function (entries) {
+      entries.forEach(function (en) {
+        if (en.isIntersecting) visible.add(en.target.id);
+        else visible.delete(en.target.id);
+      });
+      links.forEach(function (a) { a.classList.remove('active'); });
+      // 取当前可见中最靠上的那一节
+      var first = targets.filter(function (t) { return visible.has(t.id); })[0];
+      if (first && byId[first.id]) byId[first.id].classList.add('active');
+    }, { rootMargin: '-72px 0px -70% 0px' });
+    targets.forEach(function (t) { io.observe(t); });
+  })();
+</script>
+{% endblock %}

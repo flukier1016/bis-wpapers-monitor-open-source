@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}{{ code }} · {{ site_title }}{% endblock %}
+{% block content %}
+
+<div class="card prose">
+  <h1>{{ code }}{% if code == 404 %}　Page not found{% elif code == 422 %}　Invalid request parameters{% endif %}</h1>
+
+  <p class="muted">{{ detail }}</p>
+
+  {% if code == 404 %}
+  <p>The paper number may be incorrect or the paper may not be indexed yet.</p>
+  {% elif code == 422 %}
+  <p>
+    The search query or page number may be outside the allowed range.
+  </p>
+  {% endif %}
+
+  <p class="btn-row" style="margin-top:var(--s-5)">
+    <a class="btn" href="/">Back to papers</a>
+    <a class="btn btn-ghost" href="/thesis">View Chinese notes</a>
+  </p>
+</div>
+
+{% endblock %}

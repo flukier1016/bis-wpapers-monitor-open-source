@@ -1,0 +1,157 @@
+# 每周一 09:00（Asia/Shanghai）把 BIS 新论文简报发出去。
+#
+# 为什么发信这一步不在 Railway 里做：
+#   Railway 封禁了容器的全部出站 SMTP 端口（25/465/587/2525 实测全部超时，
+#   443 正常），所以服务内部永远连不上 smtp.gmail.com。GitHub Actions 不封，
+#   于是这里只当一个发信中继。
+#
+# 抓取、去重、归档、仪表盘仍然全部在 Railway 上，状态也只有那一份。
+# 正式发信分两步调用，是为了保住「发失败就不打已报告标记」这个保证：
+#   1) prepare-digest   -> 跑检查、开一条 external 投递记录、返回邮件内容
+#   2) confirm-delivery -> 确认发出后才标记为已报告
+# 中间任何一步失败，投递记录会停在 sending，Railway 启动对账时判为失败，
+# 下周自动重试，不会漏掉这批论文。
+
+name: Weekly digest
+
+on:
+  schedule:
+    # GitHub 的 cron 是 UTC。周一 01:00 UTC = 周一 09:00 Asia/Shanghai
+    - cron: '0 1 * * 1'
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Choose an operation
+        type: choice
+        default: digest
+        options:
+          - digest    # 正式：跑检查，有新论文才发信，发完标记为已报告
+          - preview   # 样张：用最近几篇排一封信发出来，不改动任何状态
+          - dry-run   # 演练：只跑检查看有没有新论文，不发信、不标记
+
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    concurrency:
+      group: weekly-digest
+      cancel-in-progress: false
+    env:
+      BASE_URL: ${{ vars.BIS_MONITOR_URL }}
+      ADMIN_TOKEN: ${{ secrets.BIS_ADMIN_TOKEN }}
+      MODE: ${{ inputs.mode || 'digest' }}
+      SMTP_USER: ${{ secrets.SMTP_USER }}
+      SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+    steps:
+      - name: 检查必要的 Secrets 是否已配置
+        run: |
+          missing=""
+          [ -n "${ADMIN_TOKEN}" ] || missing="${missing} BIS_ADMIN_TOKEN"
+          [ -n "${SMTP_USER}" ] || missing="${missing} SMTP_USER"
+          [ -n "${SMTP_PASSWORD}" ] || missing="${missing} SMTP_PASSWORD"
+          [ -n "${BASE_URL}" ] || missing="${missing} BIS_MONITOR_URL(变量)"
+          if [ -n "$missing" ]; then
+            echo "::error::还缺这些配置：${missing}"
+            echo "在 Settings → Secrets and variables → Actions 里补上。"
+            exit 1
+          fi
+          echo "配置齐全，本次模式：${MODE}"
+
+      - name: 样张（不改动任何状态）
+        id: preview
+        if: env.MODE == 'preview'
+        run: |
+          set -euo pipefail
+          response=$(curl -fsS -X POST -H "X-Admin-Token: ${ADMIN_TOKEN}" \
+            --max-time 120 "${BASE_URL}/admin/preview-digest?limit=3")
+          while IFS= read -r address; do echo "::add-mask::$address"; done < <(echo "$response" | jq -r '.recipients[]')
+          echo "subject=$(echo "$response" | jq -r '.subject')" >> "$GITHUB_OUTPUT"
+          echo "recipients=$(echo "$response" | jq -r '.recipients | join(",")')" >> "$GITHUB_OUTPUT"
+          echo "$response" | jq -r '.html' > digest.html
+          echo "Preview generated."
+
+      - name: Dry run (no email or delivery record)
+        if: env.MODE == 'dry-run'
+        run: |
+          set -euo pipefail
+          response=$(curl -fsS -X POST -H "X-Admin-Token: ${ADMIN_TOKEN}" \
+            --max-time 600 "${BASE_URL}/admin/run?send_email=false")
+          echo "$response" | jq .
+          echo "$response" | jq -e '.status == "ok"' > /dev/null
+
+      - name: 准备简报（跑检查，暂不标记为已报告）
+        id: prepare
+        if: env.MODE == 'digest'
+        run: |
+          set -euo pipefail
+          response=$(curl -fsS -X POST -H "X-Admin-Token: ${ADMIN_TOKEN}" \
+            --max-time 600 "${BASE_URL}/admin/prepare-digest")
+
+          count=$(echo "$response" | jq -r '.count')
+          echo "count=${count}" >> "$GITHUB_OUTPUT"
+
+          if [ "$count" = "0" ]; then
+            echo "### 本次检查未发现新论文" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          echo "### 发现 ${count} 篇新论文" >> "$GITHUB_STEP_SUMMARY"
+          echo "delivery_id=$(echo "$response" | jq -r '.delivery_id')" >> "$GITHUB_OUTPUT"
+          while IFS= read -r address; do echo "::add-mask::$address"; done < <(echo "$response" | jq -r '.recipients[]')
+          echo "subject=$(echo "$response" | jq -r '.subject')" >> "$GITHUB_OUTPUT"
+          echo "recipients=$(echo "$response" | jq -r '.recipients | join(",")')" >> "$GITHUB_OUTPUT"
+          echo "$response" | jq -r '.html' > digest.html
+          echo "$response" | jq -r '.paths[]' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 发送邮件
+        id: send
+        if: >-
+          env.MODE == 'preview' ||
+          (env.MODE == 'digest' && steps.prepare.outputs.count != '0')
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 587
+          secure: false
+          username: ${{ secrets.SMTP_USER }}
+          password: ${{ secrets.SMTP_PASSWORD }}
+          from: BIS Working Papers Monitor <${{ secrets.SMTP_USER }}>
+          to: ${{ steps.preview.outputs.recipients || steps.prepare.outputs.recipients }}
+          subject: ${{ steps.preview.outputs.subject || steps.prepare.outputs.subject }}
+          html_body: file://digest.html
+          convert_markdown: false
+
+      - name: 确认送达（此时才标记为已报告）
+        if: env.MODE == 'digest' && steps.prepare.outputs.count != '0' && steps.send.conclusion == 'success'
+        run: |
+          set -euo pipefail
+          curl -fsS -X POST -H "X-Admin-Token: ${ADMIN_TOKEN}" --max-time 120 \
+            "${BASE_URL}/admin/confirm-delivery?delivery_id=${{ steps.prepare.outputs.delivery_id }}" | jq .
+          echo "已确认送达并标记为已报告" >> "$GITHUB_STEP_SUMMARY"
+
+      # 存档只是顺手留一份副本，失败不该把整个 run 标红：
+      # 邮件已经发出、投递也已确认，这时报红会让人以为发信失败。
+      # 账号的 artifact 存储配额满了就会走到这里。
+      - name: 保存邮件副本（可失败）
+        if: hashFiles('digest.html') != ''
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ github.run_number }}
+          path: digest.html
+          retention-days: 14
+
+      - name: 结果小结
+        if: always()
+        run: |
+          {
+            echo "### 本次运行"
+            echo ""
+            echo "- 模式：\`${MODE}\`"
+            echo "- 发信：${{ steps.send.conclusion || '未执行' }}"
+            if [ "${{ steps.send.conclusion }}" = "success" ]; then
+              echo "- 邮件已发出。简报内容在 Railway 上也有一份 Markdown 归档。"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

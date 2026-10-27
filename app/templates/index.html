@@ -1,0 +1,119 @@
+{% extends "base.html" %}
+{% block content %}
+
+{# 全站每页都要有 h1：顶栏的品牌名是链接不是Title，屏幕阅读器按Title导航时
+   这一页原本是唯一没有着陆点的。视觉上不需要它占地方，所以只对辅助技术可见。 #}
+<h1 class="sr-only">Papers · {{ stats.total }} BIS working papers</h1>
+
+<div class="stats">
+  <div class="stat"><b>{{ stats.total }}</b><span>Papers indexed</span></div>
+  <div class="stat"><b>{{ stats.with_detail }}</b><span>Abstracts fetched</span></div>
+  <div class="stat"><b><a href="/thesis">{{ zh_count }}</a></b><span>Chinese research notes</span></div>
+  <div class="stat"><b>{{ stats.latest_date }}</b><span>Latest publication</span></div>
+  <div class="stat"><b style="font-size:var(--t-sm);line-height:1.5">{{ next_run }}</b><span>Next check</span></div>
+</div>
+
+{% if running %}
+<div class="note">A check is running. Refresh later to see the results.</div>
+{% endif %}
+
+{% if last_run %}
+<p class="muted">
+  Last check {{ last_run.started_at[:16] | replace('T', ' ') }} ·
+  <b class="{{ 'ok' if last_run.status == 'ok' else 'bad' }}">{{ last_run.status }}</b> ·
+  Listed {{ last_run.listed_count }} · New papers <b>{{ last_run.new_count }}</b>
+  {%- if last_run.is_baseline %} (baseline, no digest sent){% endif %}
+  · <a href="/runs">Run history</a>
+</p>
+{% endif %}
+
+<form class="search" method="get" action="/" role="search">
+  <input type="search" name="q" value="{{ q }}" data-search-input
+         placeholder="Search titles, authors, abstracts or keywords… (press / to focus)"
+         aria-label="Search papers">
+  <input type="text" name="jel" value="{{ jel }}" placeholder="JEL, e.g. E52"
+         aria-label="Filter by JEL classification" style="flex:0 1 150px">
+  <button type="submit">Search</button>
+  {% if q or jel %}<a class="btn btn-ghost" href="/">Clear</a>{% endif %}
+</form>
+
+{# 1369 篇里绝大多数只有Title、没有摘要，翻页几乎必然落进空表。
+   给出三个带数量的入口，让人知道点进去有没有Content。 #}
+<nav class="btn-row" style="margin-bottom:var(--s-3)" aria-label="Filters">
+  {% set base = '/?q=' ~ (q | urlencode) ~ '&jel=' ~ (jel | urlencode) ~ '&sort=' ~ sort %}
+  <a class="btn {{ 'btn-ghost' if view }}" href="{{ base }}">All {{ facets.total }}</a>
+  <a class="btn {{ 'btn-ghost' if view != 'zh' }}" href="{{ base }}&view=zh">Chinese notes {{ facets.zh }}</a>
+  <a class="btn {{ 'btn-ghost' if view != 'scored' }}" href="{{ base }}&view=scored">Abstract available {{ facets.scored }}</a>
+  {% set sbase = '/?q=' ~ (q | urlencode) ~ '&jel=' ~ (jel | urlencode) ~ '&view=' ~ view %}
+  <a class="btn btn-ghost" href="{{ sbase }}&sort={{ 'date' if sort == 'relevance' else 'relevance' }}">
+    Sort: {{ 'Relevance' if sort == 'relevance' else 'Publication date' }} ⇅
+  </a>
+</nav>
+
+<p class="muted">
+  {{ total }} results{% if q or jel or view %} matching{% endif %} · Page {{ page }} of {{ pages }}
+  {%- if q %} · Search includes English abstracts and Chinese notes{% endif %}
+</p>
+
+<div class="tbl-wrap">
+<table class="tbl">
+  <thead>
+    <tr>
+      <th scope="col">Priority</th>
+      <th scope="col">Number</th>
+      <th scope="col">Title</th>
+      <th scope="col">Authors</th>
+      <th scope="col">Publication date</th>
+      <th scope="col">Length</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for p in papers %}
+    <tr>
+      <td data-label="Priority">
+        {% if p.detail_fetched %}
+          <span class="badge t-{{ p.tier }}">{{ p.tier }} {{ p.relevance }}</span>
+        {% else %}
+          <span class="badge t-Low">Pending</span>
+        {% endif %}
+      </td>
+      <td data-label="Number" class="num">No {{ p.series }}</td>
+      <td data-label="Title">
+        <a href="/paper/{{ p.series }}">{{ p.title }}</a>
+        {% if p.has_zh %}<span class="badge badge-zh">Chinese notes</span>{% endif %}
+        {# 排序理由默认收起：56 字挂在每行下面会让一屏只剩四五篇 #}
+        {% if p.relevance_why %}
+        <details class="expand expand-why" style="margin-top:var(--s-1)">
+          <summary aria-label="Show ranking rationale"></summary>
+          <p class="muted" style="margin:var(--s-1) 0 0">{{ p.relevance_why }}</p>
+        </details>
+        {% endif %}
+      </td>
+      <td data-label="Authors" class="muted">{{ p.authors | join(', ') if p.authors else '—' }}</td>
+      <td data-label="Published" class="num">{{ p.pub_date }}</td>
+      <td data-label="Length" class="num">{{ p.pdf_pages ~ ' pages' if p.pdf_pages else '—' }}</td>
+    </tr>
+  {% else %}
+    <tr><td colspan="6" class="muted">
+      No matching papers{% if q %}. Try a shorter query or <a href="/">clear filters</a>{% endif %}.
+    </td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+
+{% if pages > 1 %}
+<nav class="pager" aria-label="Pagination">
+  {% if page > 1 %}
+    <a href="/?q={{ q | urlencode }}&jel={{ jel | urlencode }}&view={{ view }}&sort={{ sort }}&page={{ page - 1 }}"
+       rel="prev">← Previous</a>
+  {% endif %}
+  <span>{{ page }} / {{ pages }}</span>
+  {% if page < pages %}
+    <a href="/?q={{ q | urlencode }}&jel={{ jel | urlencode }}&view={{ view }}&sort={{ sort }}&page={{ page + 1 }}"
+       rel="next">Next →</a>
+  {% endif %}
+</nav>
+{% endif %}
+
+{% endblock %}

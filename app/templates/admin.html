@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+{% block title %}Admin console · {{ site_title }}{% endblock %}
+{% block content %}
+
+<div class="card">
+  <h1>Admin console</h1>
+  <p class="muted">
+    The token is stored in this tab’s session storage and sent in the <code>X-Admin-Token</code> header. Closing the tab clears the session.
+  </p>
+  <form class="search" onsubmit="saveToken(event)">
+    <input type="password" id="token" placeholder="ADMIN_TOKEN" autocomplete="off">
+    <button type="submit">Save token</button>
+  </form>
+  <p class="muted" id="tokenState">Token not set</p>
+</div>
+
+{% if external_mailer %}
+<div class="card"><h2>External mail delivery</h2><p>Run the digest workflow in your configured GitHub repository. Preview sends a test email; dry-run does not send or mark papers as reported.</p>{% if actions_url %}<a class="btn" href="{{ actions_url }}" target="_blank" rel="noopener">Open GitHub Actions ↗</a>{% else %}<p>Set GITHUB_REPO to show the workflow link.</p>{% endif %}</div>
+{% endif %}
+
+<div class="card">
+  <h2>Actions</h2>
+  <p class="muted">Actions use POST to avoid accidental triggering by previews or prefetching.</p>
+  <div class="btn-row">
+    <button onclick="call('/admin/run?send_email=false', 'Dry run')">Dry run (no email)</button>
+    <button onclick="call('/admin/backfill?limit=30', 'Backfill abstracts')">Backfill 30 abstracts</button>
+    {% if not external_mailer %}
+    <button onclick="call('/admin/check-smtp', 'Check SMTP login')">Check SMTP (no email)</button>
+    <button onclick="confirmSend()">Send test email</button>
+    {% else %}
+    <button class="btn-ghost" onclick="call('/admin/check-smtp', 'Diagnose outbound ports')">Diagnose outbound ports</button>
+    {% endif %}
+  </div>
+  <p class="muted">
+    <button type="button" onclick="downloadArchive()">Download archive ZIP</button>
+  </p>
+</div>
+
+<div class="card">
+  <h2>Result</h2>
+  <pre id="out">No actions run yet.</pre>
+</div>
+
+<script>
+const out = document.getElementById('out');
+const state = document.getElementById('tokenState');
+
+function token() { return sessionStorage.getItem('bisAdminToken') || ''; }
+
+function refresh() {
+  const t = token();
+  state.textContent = t ? `Token set (${t.length} characters)` : 'Token not set';
+}
+
+function saveToken(e) {
+  e.preventDefault();
+  const input = document.getElementById('token');
+  sessionStorage.setItem('bisAdminToken', input.value.trim());
+  input.value = '';
+  refresh();
+  out.textContent = 'Token saved for this session.';
+}
+
+function confirmSend() {
+  if (confirm('Send a test email to all configured recipients?')) call('/admin/test-email', 'Test email');
+}
+
+async function downloadArchive() {
+  if (!token()) { out.textContent = 'Enter ADMIN_TOKEN first.'; return; }
+  try {
+    const res = await fetch('/admin/export.zip', {headers: {'X-Admin-Token': token()}});
+    if (!res.ok) { out.textContent = `Download failed: HTTP ${res.status}`; return; }
+    const url = URL.createObjectURL(await res.blob());
+    const link = document.createElement('a'); link.href = url; link.download = 'bis-archive.zip';
+    document.body.appendChild(link); link.click(); link.remove(); URL.revokeObjectURL(url);
+  } catch (err) { out.textContent = `Download failed: ${err}`; }
+}
+
+async function call(url, label) {
+  if (!token()) { out.textContent = 'Enter ADMIN_TOKEN first.'; return; }
+  out.textContent = `${label} running…`;
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'X-Admin-Token': token() },
+    });
+    const text = await res.text();
+    let body;
+    try { body = JSON.stringify(JSON.parse(text), null, 2); }
+    catch { body = text; }
+    out.textContent = `${label} → HTTP ${res.status}\n\n${body}`;
+  } catch (err) {
+    out.textContent = `${label} → Request failed: ${err}`;
+  }
+}
+
+refresh();
+</script>
+
+{% endblock %}

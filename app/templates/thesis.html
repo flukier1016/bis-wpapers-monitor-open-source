@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+{% block title %}Chinese research notes · {{ site_title }}{% endblock %}
+{% block content %}
+
+<div class="card">
+  <div class="card-head">
+    <h1 style="margin:0">Chinese research notes</h1>
+    <a class="btn btn-ghost" href="/thesis.md">Export all Markdown</a>
+  </div>
+  <p class="muted">
+    {{ total }} Chinese-language research notes, grouped by topic. These notes include evidence, limitations and implications beyond the automatically retrieved abstracts.
+  </p>
+
+  <nav class="btn-row" style="margin:var(--s-4) 0" aria-label="Jump to theme">
+    {% for theme, items in by_theme.items() %}
+    <a class="btn btn-ghost" href="#theme-{{ loop.index }}">{{ theme }}（{{ items | length }}）</a>
+    {% endfor %}
+  </nav>
+
+  {% if counts %}
+  <p class="muted">
+    Review status
+    <span class="badge badge-ok">Passed {{ counts.passed }}</span>
+    {% if counts.issues %}<span class="badge t-Medium">Issues {{ counts.issues }}</span>{% endif %}
+    {% if counts.pending %}<span class="badge t-Low">Pending review {{ counts.pending }}</span>{% endif %}
+  </p>
+  {% endif %}
+
+  <details class="expand">
+    <summary></summary>
+    <div class="note" style="margin-top:var(--s-3)">
+      <b>Review and limitations:</b> The notes were checked using PDF text extraction and a separate automated review. Automated checks cannot guarantee accuracy. Verify numbers, attribution, and interpretation against the original PDF before citing. These notes are unofficial and are not BIS translations; BIS does not guarantee their accuracy or completeness. Links to the original papers are provided with each note.
+    </div>
+  </details>
+</div>
+
+{% for theme, items in by_theme.items() %}
+<div class="card" id="theme-{{ loop.index }}">
+  <div class="card-head">
+    <h2 style="margin:0">{{ theme }}</h2>
+    <span class="muted">{{ items | length }} papers</span>
+  </div>
+
+  {% for it in items %}
+  <article class="sum-item">
+    <div class="sum-title">
+      <a href="{{ '/paper/' ~ it.series if it.paper else '/thesis/' ~ it.series ~ '.md' }}">No {{ it.series }}　{{ it.title_zh }}</a>
+      {% if not it.review_ok %}
+      <span class="badge t-Medium">{{ it.review_label }}</span>
+      {% endif %}
+    </div>
+
+    {% if not it.review_ok %}
+    {# 这条决定她敢不敢Citation，不能只放在 title 属性里——手机上没有 hover #}
+    <p class="note note-warn" style="margin:var(--s-2) 0">
+      {{ it.review_note }}. Verify against the original PDF before citing.
+    </p>
+    {% endif %}
+
+    {% if it.paper %}
+    <p class="sum-meta">
+      {{ it.paper.title }}<br>
+      {{ it.paper.authors | join(', ') }} · {{ it.paper.pub_date }}
+      {%- if it.paper.pdf_pages %} · {{ it.paper.pdf_pages }} pages{% endif %}
+    </p>
+    {% endif %}
+
+    {# 索引页不该比文章还长（takeaway 中位数 637 字，13 篇全展开就没法扫了），
+       所以截断显示。原先把 .clamp 套在 <details> 里，折叠时是 0 行而不是 2 行，
+       整个索引页看不到任何摘要——展开控件也是多余的，下面就有「Read notes」。 #}
+    <p class="clamp takeaway">{{ it.key_takeaway | emphasis }}</p>
+
+    <p class="muted" style="margin:var(--s-2) 0 0">
+      <a href="{{ '/paper/' ~ it.series if it.paper else '/thesis/' ~ it.series ~ '.md' }}">Read notes</a>
+      · <a href="/thesis/{{ it.series }}.md">Markdown</a>
+      {% if it.paper and it.paper.pdf_url %}
+      · <a href="{{ it.paper.pdf_url }}" target="_blank" rel="noopener">Original PDF ↗</a>
+      {% endif %}
+      {% if it.thesis and it.thesis.related_series %}
+      · Related {% for s in it.thesis.related_series %}<a href="/paper/{{ s }}">No {{ s }}</a>{% if not loop.last %}, {% endif %}{% endfor %}
+      {% endif %}
+    </p>
+  </article>
+  {% endfor %}
+</div>
+{% else %}
+<div class="card"><p class="muted">No Chinese research notes yet.</p></div>
+{% endfor %}
+
+{% endblock %}

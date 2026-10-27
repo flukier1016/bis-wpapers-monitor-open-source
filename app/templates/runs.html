@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block title %}Run history · {{ site_title }}{% endblock %}
+{% block content %}
+
+<div class="card">
+  <h1>Run history</h1>
+  <p class="muted">Schedule <b>{{ cron }}</b> · Next check <b>{{ next_run }}</b></p>
+  <p class="muted">
+    Email delivery
+    {% if external_mailer %}
+      <span class="ok">Sent by GitHub Actions</span>
+      · <a href="/admin">Open admin console</a>
+    {% elif email_enabled %}
+      <span class="ok">Sent by the application</span>
+    {% else %}
+      <span class="bad">Not configured</span> (configure SMTP_USER / SMTP_PASSWORD / MAIL_TO)
+    {% endif %}
+  </p>
+  {% if external_mailer %}
+  <p class="muted">
+    When external delivery is enabled, GitHub Actions sends mail while this service manages collection, deduplication and archives.
+  </p>
+  {% endif %}
+  <div class="note">
+    <b>listed</b> is the number returned by BIS; <b>new</b> counts previously unknown papers. Papers are marked as reported after confirmed delivery. Failed deliveries remain eligible for retry.
+  </div>
+</div>
+
+<div class="tbl-wrap">
+<table class="tbl">
+  <thead>
+    <tr>
+      <th scope="col">#</th><th scope="col">Started</th><th scope="col">Trigger</th>
+      <th scope="col">Status</th><th scope="col">listed</th><th scope="col">new</th>
+      <th scope="col">Email</th><th scope="col">Notes</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for r in runs %}
+    <tr>
+      <td data-label="#" class="num">{{ r.id }}</td>
+      <td data-label="Time" class="num">{{ r.started_at[:16] | replace('T', ' ') }}</td>
+      <td data-label="Trigger" class="muted">{{ r.trigger }}</td>
+      <td data-label="Status">
+        <b class="{{ 'ok' if r.status == 'ok' else 'bad' }}">{{ r.status }}</b>
+      </td>
+      <td data-label="listed" class="num">{{ r.listed_count }}</td>
+      <td data-label="new" class="num"><b>{{ r.new_count }}</b></td>
+      <td data-label="Email" class="muted">{{ r.email_status or '—' }}</td>
+      <td data-label="Notes" class="muted">
+        {%- if r.is_baseline %}Baseline{% endif %}
+        {%- if r.error %}<span class="bad">{{ r.error }}</span>{% endif %}
+      </td>
+    </tr>
+  {% else %}
+    <tr><td colspan="8" class="muted">No runs yet.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+
+{% endblock %}

@@ -1,0 +1,11 @@
+[project]
+name = "bis-wpapers-monitor"
+version = "1.0.0"
+description = "Monitor BIS Working Papers with deduplication, summaries, email digests, and Markdown archives"
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+addopts = "-q --strict-markers"
+filterwarnings = ["ignore::DeprecationWarning"]
