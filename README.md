@@ -30,7 +30,7 @@ See [`.env.example`](.env.example) for configuration. Without `DATA_DIR`, the da
 
 Email is optional. With SMTP configured, a failed send leaves papers unreported for retry. With SMTP unconfigured, the archive and dashboard are treated as the delivery channel. Dry runs do not mark papers reported. A crash in the send/confirmation window creates unavoidable delivery ambiguity; exactly-once email delivery cannot be guaranteed.
 
-For hosts without SMTP access, `EXTERNAL_MAILER=true` disables the in-process schedule and delegates delivery to the included GitHub Actions workflow. Set `GITHUB_REPO`, repository variable `BIS_MONITOR_URL`, and secrets `BIS_ADMIN_TOKEN`, `SMTP_USER`, and `SMTP_PASSWORD`. The workflow schedule uses UTC; adjust its cron to match your intended local time. Workflow logs and run summaries may contain operational information; review repository visibility and retention before enabling it. Never share tokens, recipient lists, or personal archives in a public repository.
+For hosts without SMTP access, `EXTERNAL_MAILER=true` disables the in-process schedule and delegates delivery to the included GitHub Actions workflow. Set `GITHUB_REPO`, repository variable `BIS_MONITOR_URL`, and secrets `BIS_ADMIN_TOKEN`, `SMTP_USER`, and `SMTP_PASSWORD`. While none of them is set, the workflow skips the digest instead of failing; a partial configuration fails and lists what is missing. The workflow schedule uses UTC; adjust its cron to match your intended local time. Workflow logs and run summaries may contain operational information; review repository visibility and retention before enabling it. Never share tokens, recipient lists, or personal archives in a public repository.
 
 ## How it works
 

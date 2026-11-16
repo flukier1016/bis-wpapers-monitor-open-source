@@ -11,6 +11,11 @@
 #   2) confirm-delivery -> 确认发出后才标记为已报告
 # 中间任何一步失败，投递记录会停在 sending，Railway 启动对账时判为失败，
 # 下周自动重试，不会漏掉这批论文。
+#
+# Copies of this repository start without any configuration. Until the
+# BIS_MONITOR_URL variable and the BIS_ADMIN_TOKEN, SMTP_USER and SMTP_PASSWORD
+# secrets are set, the preflight job skips the digest instead of failing every
+# week. A partial configuration still fails and lists what is missing.
 
 name: Weekly digest
 
@@ -30,9 +35,47 @@ on:
           - dry-run   # 演练：只跑检查看有没有新论文，不发信、不标记
 
 jobs:
-  digest:
+  preflight:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 5
+    permissions: {}
+    outputs:
+      ready: ${{ steps.config.outputs.ready }}
+    env:
+      BASE_URL: ${{ vars.BIS_MONITOR_URL }}
+      ADMIN_TOKEN: ${{ secrets.BIS_ADMIN_TOKEN }}
+      SMTP_USER: ${{ secrets.SMTP_USER }}
+      SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+    steps:
+      - name: Check configuration
+        id: config
+        run: |
+          missing=""
+          found=0
+          note() { if [ -n "$2" ]; then found=$((found + 1)); else missing="${missing} $1"; fi; }
+          note "BIS_MONITOR_URL (variable)" "${BASE_URL}"
+          note BIS_ADMIN_TOKEN "${ADMIN_TOKEN}"
+          note SMTP_USER "${SMTP_USER}"
+          note SMTP_PASSWORD "${SMTP_PASSWORD}"
+
+          if [ "$found" -eq 0 ]; then
+            echo "::notice title=Weekly digest skipped::This repository has no deployment configured. Set the BIS_MONITOR_URL variable and the BIS_ADMIN_TOKEN, SMTP_USER and SMTP_PASSWORD secrets to enable it (see README)."
+            echo "### Weekly digest skipped: no deployment configured" >> "$GITHUB_STEP_SUMMARY"
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ -n "$missing" ]; then
+            echo "::error title=Incomplete configuration::Missing:${missing}. Add them under Settings > Secrets and variables > Actions."
+            exit 1
+          fi
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+
+  digest:
+    needs: preflight
+    if: needs.preflight.outputs.ready == 'true'
+    runs-on: ubuntu-latest
+    # A full check walks about 140 BIS listing pages (about 4 minutes in November 2026)
+    timeout-minutes: 25
     permissions:
       contents: read
     concurrency:
@@ -42,54 +85,48 @@ jobs:
       BASE_URL: ${{ vars.BIS_MONITOR_URL }}
       ADMIN_TOKEN: ${{ secrets.BIS_ADMIN_TOKEN }}
       MODE: ${{ inputs.mode || 'digest' }}
-      SMTP_USER: ${{ secrets.SMTP_USER }}
-      SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
     steps:
-      - name: 检查必要的 Secrets 是否已配置
-        run: |
-          missing=""
-          [ -n "${ADMIN_TOKEN}" ] || missing="${missing} BIS_ADMIN_TOKEN"
-          [ -n "${SMTP_USER}" ] || missing="${missing} SMTP_USER"
-          [ -n "${SMTP_PASSWORD}" ] || missing="${missing} SMTP_PASSWORD"
-          [ -n "${BASE_URL}" ] || missing="${missing} BIS_MONITOR_URL(变量)"
-          if [ -n "$missing" ]; then
-            echo "::error::还缺这些配置：${missing}"
-            echo "在 Settings → Secrets and variables → Actions 里补上。"
-            exit 1
-          fi
-          echo "配置齐全，本次模式：${MODE}"
+      # Only needed for .github/scripts/admin_api.sh, which explains failed admin calls
+      - uses: actions/checkout@v4
 
       - name: 样张（不改动任何状态）
         id: preview
         if: env.MODE == 'preview'
         run: |
           set -euo pipefail
-          response=$(curl -fsS -X POST -H "X-Admin-Token: ${ADMIN_TOKEN}" \
-            --max-time 120 "${BASE_URL}/admin/preview-digest?limit=3")
-          while IFS= read -r address; do echo "::add-mask::$address"; done < <(echo "$response" | jq -r '.recipients[]')
-          echo "subject=$(echo "$response" | jq -r '.subject')" >> "$GITHUB_OUTPUT"
-          echo "recipients=$(echo "$response" | jq -r '.recipients | join(",")')" >> "$GITHUB_OUTPUT"
-          echo "$response" | jq -r '.html' > digest.html
+          bash .github/scripts/admin_api.sh "/admin/preview-digest?limit=3" 120 response.json \
+            '(.subject|type) == "string" and (.html|type) == "string" and (.recipients|type) == "array" and (.recipients|length) > 0' \
+            'subject, html, non-empty recipients'
+          while IFS= read -r address; do echo "::add-mask::$address"; done < <(jq -r '.recipients[]' response.json)
+          echo "subject=$(jq -r '.subject' response.json)" >> "$GITHUB_OUTPUT"
+          echo "recipients=$(jq -r '.recipients | join(",")' response.json)" >> "$GITHUB_OUTPUT"
+          jq -r '.html' response.json > digest.html
           echo "Preview generated."
 
       - name: Dry run (no email or delivery record)
         if: env.MODE == 'dry-run'
         run: |
           set -euo pipefail
-          response=$(curl -fsS -X POST -H "X-Admin-Token: ${ADMIN_TOKEN}" \
-            --max-time 600 "${BASE_URL}/admin/run?send_email=false")
-          echo "$response" | jq .
-          echo "$response" | jq -e '.status == "ok"' > /dev/null
+          bash .github/scripts/admin_api.sh "/admin/run?send_email=false" 840 response.json \
+            '(.status|type) == "string"' 'status'
+          jq . response.json
+          if [ "$(jq -r '.status' response.json)" != "ok" ]; then
+            echo "::error title=Check failed::$(jq -r '.error // .message // "no error message"' response.json | tr '\r\n' '  ' | sed 's/%/%25/g')"
+            exit 1
+          fi
 
       - name: 准备简报（跑检查，暂不标记为已报告）
         id: prepare
         if: env.MODE == 'digest'
         run: |
           set -euo pipefail
-          response=$(curl -fsS -X POST -H "X-Admin-Token: ${ADMIN_TOKEN}" \
-            --max-time 600 "${BASE_URL}/admin/prepare-digest")
+          # 840 s stays below Railway's 15-minute request limit
+          # With new papers, every field the email needs must be present
+          bash .github/scripts/admin_api.sh /admin/prepare-digest 840 response.json \
+            '(.count|type) == "number" and (.count == 0 or ((.delivery_id|type) == "number" and (.subject|type) == "string" and (.html|type) == "string" and (.recipients|type) == "array" and (.recipients|length) > 0 and (.paths|type) == "array"))' \
+            'count; with new papers also delivery_id, subject, html, non-empty recipients, paths'
 
-          count=$(echo "$response" | jq -r '.count')
+          count=$(jq -r '.count' response.json)
           echo "count=${count}" >> "$GITHUB_OUTPUT"
 
           if [ "$count" = "0" ]; then
@@ -98,12 +135,12 @@ jobs:
           fi
 
           echo "### 发现 ${count} 篇新论文" >> "$GITHUB_STEP_SUMMARY"
-          echo "delivery_id=$(echo "$response" | jq -r '.delivery_id')" >> "$GITHUB_OUTPUT"
-          while IFS= read -r address; do echo "::add-mask::$address"; done < <(echo "$response" | jq -r '.recipients[]')
-          echo "subject=$(echo "$response" | jq -r '.subject')" >> "$GITHUB_OUTPUT"
-          echo "recipients=$(echo "$response" | jq -r '.recipients | join(",")')" >> "$GITHUB_OUTPUT"
-          echo "$response" | jq -r '.html' > digest.html
-          echo "$response" | jq -r '.paths[]' >> "$GITHUB_STEP_SUMMARY"
+          echo "delivery_id=$(jq -r '.delivery_id' response.json)" >> "$GITHUB_OUTPUT"
+          while IFS= read -r address; do echo "::add-mask::$address"; done < <(jq -r '.recipients[]' response.json)
+          echo "subject=$(jq -r '.subject' response.json)" >> "$GITHUB_OUTPUT"
+          echo "recipients=$(jq -r '.recipients | join(",")' response.json)" >> "$GITHUB_OUTPUT"
+          jq -r '.html' response.json > digest.html
+          jq -r '.paths[]' response.json >> "$GITHUB_STEP_SUMMARY"
 
       - name: 发送邮件
         id: send
@@ -125,10 +162,13 @@ jobs:
 
       - name: 确认送达（此时才标记为已报告）
         if: env.MODE == 'digest' && steps.prepare.outputs.count != '0' && steps.send.conclusion == 'success'
+        env:
+          DELIVERY_ID: ${{ steps.prepare.outputs.delivery_id }}
         run: |
           set -euo pipefail
-          curl -fsS -X POST -H "X-Admin-Token: ${ADMIN_TOKEN}" --max-time 120 \
-            "${BASE_URL}/admin/confirm-delivery?delivery_id=${{ steps.prepare.outputs.delivery_id }}" | jq .
+          bash .github/scripts/admin_api.sh "/admin/confirm-delivery?delivery_id=${DELIVERY_ID}" 120 confirm.json \
+            '.ok == true' 'ok is true'
+          jq . confirm.json
           echo "已确认送达并标记为已报告" >> "$GITHUB_STEP_SUMMARY"
 
       # 存档只是顺手留一份副本，失败不该把整个 run 标红：
